@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zoho Projects Task Hub</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <header class="app-header">
+            <div class="logo">
+                <div class="logo-icon"></div>
+                <h1>Zoho Task Hub</h1>
+            </div>
+            <div class="header-actions">
+                <select id="persona-select" class="project-select" style="border-color: var(--accent-color); color: var(--accent-color);">
+                    <option value="developer">Role: Developer</option>
+                    <option value="admin">Role: Admin</option>
+                </select>
+                <select id="project-select" class="project-select">
+                    <option value="">Loading Projects...</option>
+                </select>
+                <button id="create-task-btn" class="btn primary-btn">+ New Task</button>
+                <button id="refresh-btn" class="btn">Refresh</button>
+            </div>
+        </header>
+
+        <main class="main-content">
+            <div id="loader" class="loader">Loading tasks...</div>
+            <div id="tasks-container" class="hidden" style="overflow-x: auto;">
+                <table class="tasks-table" id="tasks-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Task Name</th>
+                            <th>Project</th>
+                            <th>Owner</th>
+                            <th>Status</th>
+                            <th>Tags</th>
+                            <th>Start Date</th>
+                            <th>Due Date</th>
+                            <th>Duration</th>
+                            <th>Priority</th>
+                            <th>% Completion</th>
+                            <th>TimeLog / Total</th>
+                            <th class="action-col admin-only hidden">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tasks-tbody">
+                        <!-- Task rows will be injected here -->
+                    </tbody>
+                </table>
+            </div>
+        </main>
+    </div>
+
+    <!-- Floating Chatbot Widget -->
+    <div id="chat-widget" class="chat-widget">
+        <button id="chat-fab" class="chat-fab" title="Open AI Assistant">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"></path></svg>
+        </button>
+
+        <div id="chat-panel" class="chat-panel hidden">
+            <div class="chat-header">
+                <h3>AI Assistant</h3>
+                <button id="close-chat" class="close-btn">&times;</button>
+            </div>
+            <div class="chat-body" id="chat-body">
+                <div class="message ai-message">
+                    Hi! I'm your AI assistant. I can help you manage your Zoho Projects. How can I help today?
+                </div>
+            </div>
+            <div class="chat-footer">
+                <input type="text" id="chat-input" placeholder="Ask about your tasks..." autocomplete="off">
+                <button id="send-btn" class="send-btn">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path></svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create Task Modal -->
+    <div id="task-modal" class="modal hidden">
+        <div class="modal-content">
+            <h3 style="margin-bottom: 1rem;">Create New Task</h3>
+            <input type="text" id="new-task-name" placeholder="Task Name..." class="modal-input" autocomplete="off">
+            <select id="new-task-priority" class="modal-select">
+                <option value="None">Priority: None</option>
+                <option value="Low">Priority: Low</option>
+                <option value="Medium">Priority: Medium</option>
+                <option value="High">Priority: High</option>
+            </select>
+            <div style="display:flex; justify-content: flex-end; gap:1rem; margin-top:2rem;">
+                <button id="cancel-task-btn" class="btn" style="background: rgba(255,255,255,0.1); color: white;">Cancel</button>
+                <button id="submit-task-btn" class="btn primary-btn">Create Task</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js?v=2"></script>
+</body>
+</html>
