@@ -66,7 +66,7 @@ def load_tokens() -> dict:
         blank = {
             "access_token": "",
             "refresh_token": "",
-            "scope": "ZohoProjects.tasks.ALL ZohoProjects.projects.ALL",
+            "scope": "ZohoProjects.tasks.ALL ZohoProjects.projects.ALL ZohoProjects.users.ALL",
             "api_domain": "https://www.zohoapis.in",
             "token_type": "Bearer",
             "expires_in": 3600
@@ -203,7 +203,7 @@ def login():
     if not CLIENT_ID or not CLIENT_SECRET:
         raise HTTPException(500, "ZOHO_CLIENT_ID or ZOHO_CLIENT_SECRET not set in .env")
 
-    scope = "ZohoProjects.portals.ALL,ZohoProjects.projects.ALL,ZohoProjects.tasks.ALL"
+    scope = "ZohoProjects.portals.ALL,ZohoProjects.projects.ALL,ZohoProjects.tasks.ALL,ZohoProjects.users.ALL"
     auth_url = (
         f"{ZOHO_ACCOUNTS_URL}/oauth/v2/auth"
         f"?scope={scope}"
@@ -470,12 +470,12 @@ Example format for options:
 ```json
 {
   "options": [
-    {"label": "John Doe", "value": "12345ID"},
-    {"label": "Jane Doe", "value": "67890ID"}
+    {"label": "Actual Name from DB", "value": "ID from DB"},
+    {"label": "Another Name from DB", "value": "ID from DB"}
   ]
 }
 ```
-Include your conversational normal text BEFORE the JSON block.
+Include your conversational normal text BEFORE the JSON block. If a tool returns an error, DO NOT make up fake users, simply tell the user the API failed!
 2. Smart Clarifications: If you need a project_id but only have the name, try to list_projects first. If you need a user ID, list_users first! For task statuses, you can use the update_task tool.
 3. Reviewing Utilization & Status Updates: When asked about utilization of each team/member, use list_projects and list_tasks to calculate assignments. Use list_users to ensure mapping. You can update task statuses using the update_task tool.
 4. "Due this month": Look at the current date dynamically (evaluate it) and use list_projects to see `end_date_format` or `end_date` to determine what projects are due this month.
