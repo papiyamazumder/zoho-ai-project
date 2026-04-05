@@ -14,16 +14,18 @@
  * All API calls go to http://localhost:8000 (same origin when served via /app)
  */
 
+// Wait for the entire HTML document to load before running our JS
 document.addEventListener('DOMContentLoaded', () => {
 
     // ── DOM references ──────────────────────────────────────────────────────
+    // Get references to main table areas and structural elements
     const tasksContainer  = document.getElementById('tasks-container');
     const tasksTbody      = document.getElementById('tasks-tbody');
     const loader          = document.getElementById('loader');
     const refreshBtn      = document.getElementById('refresh-btn');
     const projectSelect   = document.getElementById('project-select');
 
-    // Create-task modal elements
+    // Get references for the 'Create Task' modal
     const createTaskBtn   = document.getElementById('create-task-btn');
     const taskModal       = document.getElementById('task-modal');
     const modalCloseBtn   = document.getElementById('modal-close-btn');
@@ -32,7 +34,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const newTaskName     = document.getElementById('new-task-name');
     const newTaskPriority = document.getElementById('new-task-priority');
 
-    // Chat widget elements
+    // Get references for the Floating Chat Widget
     const chatFab         = document.getElementById('chat-fab');
     const chatPanel       = document.getElementById('chat-panel');
     const closeChatBtn    = document.getElementById('close-chat');
@@ -47,26 +49,31 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function loadProjects() {
         try {
+            // Call our backend API to list all projects the user can access
             const res = await fetch('/projects');
 
-            // If the token expired, redirect to OAuth login
+            // If the token expired, redirect user to the OAuth login flow
             if (res.status === 401) {
                 window.location.href = '/auth/login';
                 return;
             }
+            // If any other error occurs, throw an exception
             if (!res.ok) throw new Error(await res.text());
 
+            // Extract the list of projects from the API response
             const data     = await res.json();
             const projects = data.projects || [];
 
+            // Clear the existing dropdown values
             projectSelect.innerHTML = '';
 
+            // If no projects exist, tell the user
             if (projects.length === 0) {
                 projectSelect.innerHTML = '<option value="">No projects found</option>';
                 return;
             }
 
-            // Build one <option> per project
+            // Loop over every project and create an <option> to add to the HTML Select menu
             projects.forEach(proj => {
                 const opt       = document.createElement('option');
                 opt.value       = proj.id_string;
@@ -74,7 +81,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 projectSelect.appendChild(opt);
             });
 
-            // Load tasks for whichever project is selected by default
+            // Load tasks for whichever project was selected by default the first time
             loadTasks();
 
         } catch (err) {
@@ -83,7 +90,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Reload tasks whenever the user changes the project dropdown
+    // Add an event listener to reload tasks if the user picks a different project
     projectSelect.addEventListener('change', loadTasks);
 
 
@@ -92,25 +99,31 @@ document.addEventListener('DOMContentLoaded', () => {
     // Shows a spinner while loading, then calls renderTasks().
 
     async function loadTasks() {
+        // Find out which project the user currently has selected
         const projectId = projectSelect.value;
         if (!projectId) return;
 
-        // Show loading spinner, hide table
+        // Show a loading spinner and hide the table so the user knows it's loading
         loader.innerHTML = '<div class="loader-spinner"></div><p>Loading tasks...</p>';
         loader.classList.remove('hidden');
         tasksContainer.classList.add('hidden');
 
         try {
+            // Ask the backend for all tasks matching the selected project
             const res = await fetch(`/tasks?project_id=${projectId}`);
             if (!res.ok) throw new Error(await res.text());
 
+            // Get the list of tasks from the response payload
             const data        = await res.json();
             const tasks       = data.tasks || [];
+            // Retrieve the project name for display purposes in the UI
             const projectName = projectSelect.options[projectSelect.selectedIndex]?.text || '';
 
+            // Send the raw data to `renderTasks` to actually build the HTML table rows
             renderTasks(tasks, projectName);
 
         } catch (err) {
+            // Handle errors by updating the UI loader box to show a red error icon and message
             console.error('loadTasks error:', err);
             loader.innerHTML = `
                 <div style="color:#c50f1f;text-align:center;padding:40px">
@@ -125,6 +138,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // Let the user force a reload by clicking the refresh button
     refreshBtn.addEventListener('click', loadTasks);
 
 
@@ -133,9 +147,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // table rows. Also attaches delete button listeners on each row.
 
     function renderTasks(tasks, projectName) {
+        // Clear any previous items in the HTML table body
         tasksTbody.innerHTML = '';
 
-        // Handle empty state
+        // If the project doesn't have any tasks, inform the user with a nice placeholder state
         if (tasks.length === 0) {
             loader.innerHTML = `
                 <div style="text-align:center;color:#616161;padding:60px 0">
@@ -150,22 +165,27 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        // Loop over every single task loaded from the backend
         tasks.forEach(task => {
-            // Extract values safely (Zoho API may omit fields)
+            // Apply priority css classifications (None, Low, Medium, High)
             const priorityClass = `priority-${(task.priority || 'none').toLowerCase()}`;
+            // Determine the progress bar completion state
             const percent       = task.percent_complete || 0;
+            // Get the color Zoho assigns to the status, default to grey
             const colorCode     = task.status?.color_code || '#c8c6c4';
+            // Determine progress bar color based on 100% vs partial
             const progressColor = percent === 100 ? '#107c10' : '#6264a7';
 
-            // Owner — Zoho nests owner info inside task.details.owners
+            // Owner logic — Zoho provides owners in an array format inside task.details
             let ownerName = '—';
             if (task.details?.owners?.length > 0) {
+                // Try grabbing the 'name' or 'full_name' properties safely
                 ownerName = task.details.owners[0].name
                          || task.details.owners[0].full_name
                          || '—';
             }
 
-            // Tags / labels
+            // Prepare inline tags / labels if any exist
             let tagsHtml = '—';
             if (Array.isArray(task.tags) && task.tags.length > 0) {
                 tagsHtml = task.tags
@@ -173,12 +193,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     .join(' ');
             }
 
-            // Avatar initials (first letter of each word, max 2 chars)
+            // Create 1-2 letter initial representation for the user's avatar icon based on their name
             const initials = ownerName !== '—'
                 ? ownerName.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()
                 : '?';
 
-            // Build the table row
+            // Build the row (<tr>) element and inject column data (<td>)
             const tr = document.createElement('tr');
             tr.innerHTML = `
                 <td><span class="task-id">${task.key || task.id_string}</span></td>
@@ -222,28 +242,35 @@ document.addEventListener('DOMContentLoaded', () => {
                     <button class="danger-btn delete-task-btn" data-id="${task.id_string}">Delete</button>
                 </td>`;
 
+            // Append the row to the table body
             tasksTbody.appendChild(tr);
         });
 
+        // Hide the loader, reveal the tasks table container now that data is populated
         loader.classList.add('hidden');
         tasksContainer.classList.remove('hidden');
 
         // ── SECTION D1: Delete Task ─────────────────────────────────────────
-        // Attaches a click listener to every "Delete" button in the table.
+        // Attaches a click listener to every "Delete" button in the newly generated table.
         // Calls DELETE /projects/{id}/tasks/{task_id} on confirmation.
         document.querySelectorAll('.delete-task-btn').forEach(btn => {
             btn.addEventListener('click', async (e) => {
+                // Get the task ID encoded in HTML data-id attribute
                 const taskId    = e.target.getAttribute('data-id');
+                // Target the currently selected project
                 const projectId = projectSelect.value;
 
+                // Stop the operation if user cancels the native pop-up dialogue
                 if (!confirm('Delete this task? This action cannot be undone.')) return;
 
                 try {
+                    // Start an HTTP DELETE request linking back to backend FastAPI
                     const res = await fetch(`/projects/${projectId}/tasks/${taskId}`, { method: 'DELETE' });
                     if (!res.ok) throw new Error(await res.text());
-                    // Reload the task list to reflect the deletion
+                    // If successful, reload tasks from scratch to accurately reflect removal
                     loadTasks();
                 } catch (err) {
+                    // Show a Javascript alert with the error message
                     alert('Failed to delete task: ' + err.message);
                 }
             });
@@ -260,19 +287,23 @@ document.addEventListener('DOMContentLoaded', () => {
             alert('Select a project before creating a task.');
             return;
         }
+        // Reset the form fields right as the Modal is about to be displayed
         newTaskName.value = '';        // clear previous input
         newTaskPriority.value = 'None';
+        // Make modal visible by removing 'hidden' CSS class
         taskModal.classList.remove('hidden');
         newTaskName.focus();
     });
 
-    // Close modal on Cancel or X button
+    // Both the X Button and the "Cancel" Button share this logic to hide the Modal
     [cancelTaskBtn, modalCloseBtn].forEach(btn => {
         btn.addEventListener('click', () => taskModal.classList.add('hidden'));
     });
 
+    // When clicking "Create Task" inside the modal, proceed with the API call
     submitTaskBtn.addEventListener('click', async () => {
         const name = newTaskName.value.trim();
+        // Validation check to enforce that task names aren't empty
         if (!name) {
             alert('Task name is required.');
             return;
@@ -281,12 +312,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const priority  = newTaskPriority.value;
         const projectId = projectSelect.value;
 
-        // Show loading state on the button to prevent double-submit
+        // Briefly change button text to simulate a loading state
         submitTaskBtn.textContent = 'Creating...';
-        submitTaskBtn.disabled    = true;
+        submitTaskBtn.disabled    = true; // prevent the user from clicking the submit twice accidentally
 
         try {
-            // POST /projects/{project_id}/tasks
+            // POST /projects/{project_id}/tasks - Creating the actual REST API Payload
             const res = await fetch(`/projects/${projectId}/tasks`, {
                 method:  'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -294,11 +325,14 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             if (!res.ok) throw new Error(await res.text());
 
+            // If it succeeds, hide the modal and force refresh the list
             taskModal.classList.add('hidden');
-            loadTasks();    // Refresh the table to show the new task
+            loadTasks();    
         } catch (err) {
+            // Issue alert pointing out failure mechanism (like token expiration, invalid param)
             alert('Failed to create task: ' + err.message);
         } finally {
+            // Revert the button to its normal operational state
             submitTaskBtn.textContent = 'Create Task';
             submitTaskBtn.disabled    = false;
         }
@@ -306,17 +340,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
     // ── SECTION F: Chat Widget ──────────────────────────────────────────────
-    // A floating chat button opens a panel.
+    // A floating chat button opens a panel allowing interaction with Groq/LLM engine.
 
+    // Store dialogue locally as JSON object array so the LLM retains context locally.
     let chatHistory = [];
 
+    // Tapping the bottom right FAB circle reveals the floating message window.
     chatFab.addEventListener('click', () => {
         chatPanel.classList.toggle('hidden');
+        // Auto focus the input automatically if the window just appeared
         if (!chatPanel.classList.contains('hidden')) chatInput.focus();
     });
 
+    // Allow user to manually collapse chat window using top right X
     closeChatBtn.addEventListener('click', () => chatPanel.classList.add('hidden'));
 
+    // This utility function generates HTML dynamically for any bubble type block (User or AI)
     function createMsgElement(text, isUser, options) {
         const msgDiv     = document.createElement('div');
         msgDiv.className = `message ${isUser ? 'user-message' : 'ai-message'}`;
@@ -333,14 +372,17 @@ document.addEventListener('DOMContentLoaded', () => {
         senderSpan.textContent = isUser ? 'You' : 'Zoho AI Assistant';
 
         const textP     = document.createElement('p');
+        // Replace typical \n return commands with linebreaks for HTML output
         textP.innerHTML = text.replace(/\n/g, '<br>');
 
         contentDiv.appendChild(senderSpan);
         contentDiv.appendChild(textP);
         
+        // When AI decides asking for user validation via JSON payload...
         if (options && options.length > 0) {
             const optionsContainer = document.createElement('div');
             optionsContainer.className = 'chat-options-container';
+            // Render interactive user JSON buttons representing API options available
             options.forEach(opt => {
                 const btn = document.createElement('button');
                 btn.className = 'chat-option-btn';
@@ -353,26 +395,34 @@ document.addEventListener('DOMContentLoaded', () => {
             contentDiv.appendChild(optionsContainer);
         }
 
+        // Attach elements up the tree and push back to render stack
         msgDiv.appendChild(avatarDiv);
         msgDiv.appendChild(contentDiv);
         return msgDiv;
     }
 
+    // Handles injecting messages onto the UI properly and forcing the camera constraint downwards
     function addMessage(text, isUser = false, options = null) {
         const msgDiv = createMsgElement(text, isUser, options);
         chatBody.appendChild(msgDiv);
+        // Ensure scroll forces to latest sent element automatically in chat frame
         chatBody.scrollTop = chatBody.scrollHeight;
     }
 
+    // Processing event responsible for pushing traffic to LLM service via backend endpoint structure
     async function handleSend(forcedText = null) {
         const text = typeof forcedText === 'string' ? forcedText : chatInput.value.trim();
+        // If chat payload was totally empty don't route out dummy API queries
         if (!text) return;
 
+        // Inject the sent user command onto the UI explicitly
         addMessage(text, true);
         if (typeof forcedText !== 'string') chatInput.value = '';
 
+        // Push input text structurally to backend for contextual reasoning 
         chatHistory.push({ role: 'user', content: text });
 
+        // Show a brief '...' status window allowing User to see visual loading indication
         const loadingId = 'loading-' + Date.now();
         const msgDiv = createMsgElement('...', false);
         msgDiv.id = loadingId;
@@ -380,6 +430,7 @@ document.addEventListener('DOMContentLoaded', () => {
         chatBody.scrollTop = chatBody.scrollHeight;
 
         try {
+            // Forward payload string array up into /chat FastAPI pipeline
             const res = await fetch('/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -388,13 +439,17 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!res.ok) throw new Error('API Error');
             const data = await res.json();
 
+            // Destroy interim wait indication completely.
             document.getElementById(loadingId)?.remove();
 
+            // Maintain history record
             chatHistory.push({ role: 'assistant', content: data.content });
 
             let responseContent = data.content;
             let options = null;
+            // The AI acts conversational, but pushes JSON blocks via regex markdown syntax to trigger UI selections
             const jsonMatch = responseContent.match(/```json\s*([\s\S]*?)\s*```/);
+            // Safely parse JSON structure to generate buttons natively if provided by the assistant model
             if (jsonMatch) {
                 try {
                     const parsed = JSON.parse(jsonMatch[1]);
@@ -405,17 +460,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 } catch(e) {}
             }
 
+            // Put formatted message completely on DOM window 
             addMessage(responseContent || "Done.", false, options);
             
-            // Auto refresh if task operations might have occurred
+            // Auto refresh task table silently just assuming user generated/deleted items 
             loadTasks();
             
         } catch (err) {
+            // Failsafe condition in case Model pipeline or groq interface completely falls off sync
             document.getElementById(loadingId)?.remove();
             addMessage('Error: Cannot reach assistant.', false);
         }
     }
 
+    // Register basic input bindings such as pressing standard enter resolving user payload submission
     sendBtn.addEventListener('click', handleSend);
     chatInput.addEventListener('keypress', e => {
         if (e.key === 'Enter') handleSend();
@@ -424,5 +482,4 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ── Initialise the page ─────────────────────────────────────────────────
     loadProjects();      // Fetch projects from API and then auto-load tasks
-
 });
