@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from typing import Optional
 from groq import Groq
 import traceback
+import ollama
 
 # Optional imports for local LLM fallback
 try:
@@ -58,6 +59,16 @@ TOKEN_FILE = "zoho_tokens.json"
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+
+# ── Ollama Local LLM Configuration ───────────────────────────────────────────
+LOCAL_LLM_URL = os.getenv("LOCAL_LLM_URL", "http://localhost:11434")
+# The ollama library uses OLLAMA_HOST. If we have a URL, extract the host part.
+if "api/chat" in LOCAL_LLM_URL:
+    os.environ["OLLAMA_HOST"] = LOCAL_LLM_URL.split("/api/chat")[0]
+else:
+    os.environ["OLLAMA_HOST"] = LOCAL_LLM_URL
+
+LOCAL_LLM_MODEL = os.getenv("LOCAL_LLM_MODEL", "llama3")
 # ── Token helpers ──────────────────────────────────────────────────────────────
 
 def load_tokens() -> dict:
@@ -488,8 +499,9 @@ zoho_tools = [
 
 SYSTEM_PROMPT = """
 You are the Zoho AI Assistant, deeply integrated with Zoho Projects to manage tasks, projects, and analyze team utilization.
+
 Core rules:
-1. Interactive & Guided UI: For CRUD operations or selecting items (e.g., choosing a project or an assignee), DO NOT ask the user to type structured inputs manually. Instead, instruct them with normal text, BUT format your FINAL response to include a strict JSON block wrapped in ` ```json ` ... ` ``` ` that defines options the UI will render as buttons.
+1. Natural Language & Guided UI: ALWAYS respond in natural, plain, conversational human English. Do not use highly-structured robotic jargon. For CRUD operations or selecting items (e.g., choosing a project or an assignee), instruct the user conversationally, BUT format your FINAL response to include a strict JSON block wrapped in ` ```json ` ... ` ``` ` that defines options the UI will render as buttons.
 Example format for options:
 ```json
 {
@@ -499,6 +511,7 @@ Example format for options:
   ]
 }
 ```
+CRITICAL RULE: NEVER output a JSON block for simple text inputs (like asking for a task name or description). ONLY use JSON blocks strictly for providing `options` buttons when a user needs to pick from a list. Ask for all other inputs in plain natural English (e.g., "What would you like the task name to be?").
 Include your conversational normal text BEFORE the JSON block. If a tool returns an error, DO NOT make up fake users, simply tell the user the API failed!
 2. Strict Task Creation Workflow Constraint:
    - When creating a task, you MUST confirm the `project_id` FIRST (using `list_projects` if needed).
@@ -506,6 +519,9 @@ Include your conversational normal text BEFORE the JSON block. If a tool returns
    - Format the valid project users as JSON options buttons, and ask the user for both the assignee selection and the task name simultaneously.
 3. Reviewing Utilization & Status Updates: When asked about utilization of each team/member, use list_projects and list_tasks to calculate assignments. Use list_users to ensure mapping. You can update task statuses using the update_task tool.
 4. "Due this month": Look at the current date dynamically (evaluate it) and use list_projects to see `end_date_format` or `end_date` to determine what projects are due this month.
+5. Task Assignment Choice: When a user asks you to create and assign a task (or assign an existing task), without explicitly specifying an assignee, you MUST first offer them a choice. Give them two JSON button options: "Assign manually myself" and "Auto-assign (balance load)".
+If they select "Auto-assign (balance load)", you MUST dynamically calculate the utilization of the project team members. To do this: first call `list_project_users` to get the team member IDs. Then call `list_tasks` to get the current tasks in the project. Count the number of active tasks assigned to each team member (by matching `owner_id` or `name`). Automatically call `create_task` or `update_task`, providing the user ID (`person_responsible`) of the team member with the LOWEST number of assigned tasks. Finally, explain in natural human language who you assigned the task to and why.
+If they select "Assign manually myself", call `list_project_users` and present the users as JSON button options for them to pick from.
 """
 
 local_llm_instance = None
@@ -533,7 +549,7 @@ def execute_tool(tool_call):
             return [{"id_string": p.get("id_string"), "name": p.get("name"), "end_date_format": p.get("end_date_format", ""), "end_date": p.get("end_date", "")} for p in data.get("projects", [])]
         elif name == "list_tasks":
             data = list_tasks(args["project_id"])
-            return [{"id_string": t.get("id_string"), "name": t.get("name"), "status": t.get("status",{}).get("name"), "priority": t.get("priority"), "owner": (t.get("details",{}).get("owners") or [{}])[0].get("name")} for t in data.get("tasks", [])]
+            return [{"id_string": t.get("id_string"), "name": t.get("name"), "status": t.get("status",{}).get("name"), "priority": t.get("priority"), "owner": (t.get("details",{}).get("owners") or [{}])[0].get("name"), "owner_id": (t.get("details",{}).get("owners") or [{}])[0].get("id")} for t in data.get("tasks", [])]
         elif name == "create_task":
             return create_task(args["project_id"], TaskCreate(
                 name=args["name"], 
@@ -568,6 +584,9 @@ def chat(request: ChatRequest):
     if not groq_client:
         raise HTTPException(500, "Groq API client is not configured.")
     
+    # Check if a fallback notification has already been shown in this conversation
+    has_fallback_note = any("*(Note: Acting via" in m.content for m in request.messages if m.content)
+
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     for m in request.messages:
         messages.append({"role": m.role, "content": m.content})
@@ -576,6 +595,7 @@ def chat(request: ChatRequest):
         while True:
             content_text = None
             tool_calls_data = []
+            fallback_used = None
 
             try:
                 # Primary Groq API Route
@@ -591,37 +611,72 @@ def chat(request: ChatRequest):
                 tool_calls_data = m.tool_calls or []
             except Exception as groq_err:
                 print(f"[Fallback] Groq API Failed: {groq_err}")
-                print(f"[Fallback] Swapping to Local LLM (llama-cpp-python)...")
-                llm = get_local_llm()
                 
-                # Filter out messages with type expected by groq into pure dicts
-                clean_msgs = []
-                for msg in messages:
-                    if isinstance(msg, dict):
-                        clean_msgs.append(msg)
-                    else:
-                        clean_msgs.append(msg.model_dump(exclude_none=True))
-                
-                res = llm.create_chat_completion(
-                    messages=clean_msgs,
-                    tools=zoho_tools,
-                    tool_choice="auto",
-                    max_tokens=2048
-                )
-                m_data = res["choices"][0]["message"]
-                content_text = m_data.get("content")
-                
-                # Map llama-cpp dict output to object-like structure so the remaining code works
-                class MockFunc:
-                    def __init__(self, name, args):
-                        self.name = name
-                        self.arguments = args
-                class MockTC:
-                    def __init__(self, t_id, name, args):
-                        self.id = t_id
-                        self.function = MockFunc(name, args)
-                for tc in m_data.get("tool_calls", []):
-                    tool_calls_data.append(MockTC(tc["id"], tc["function"]["name"], tc["function"]["arguments"]))
+                try:
+                    fallback_used = "Ollama"
+                    print(f"[Fallback] Swapping to Ollama ({LOCAL_LLM_MODEL})...")
+                    # Clean messages for Ollama
+                    clean_msgs = []
+                    for msg in messages:
+                        if isinstance(msg, dict):
+                            clean_msgs.append(msg)
+                        else:
+                            clean_msgs.append(msg.model_dump(exclude_none=True))
+
+                    res = ollama.chat(
+                        model=LOCAL_LLM_MODEL,
+                        messages=clean_msgs,
+                        tools=zoho_tools,
+                    )
+                    m_data = res["message"]
+                    content_text = m_data.get("content")
+                    
+                    # Map Ollama output to object-like structure
+                    class MockFunc:
+                        def __init__(self, name, args):
+                            self.name = name
+                            self.arguments = json.dumps(args) if isinstance(args, dict) else args
+                    class MockTC:
+                        def __init__(self, t_id, name, args):
+                            self.id = t_id
+                            self.function = MockFunc(name, args)
+                    
+                    for tc in m_data.get("tool_calls", []):
+                        fn_data = tc["function"]
+                        tool_calls_data.append(MockTC(f"ollama_{fn_data['name']}", fn_data['name'], fn_data['arguments']))
+
+                except Exception as ollama_err:
+                    print(f"[Fallback] Ollama Failed: {ollama_err}")
+                    fallback_used = "Offline Llama-cpp"
+                    print(f"[Fallback] Swapping to Local LLM (llama-cpp-python)...")
+                    llm = get_local_llm()
+                    
+                    clean_msgs = []
+                    for msg in messages:
+                        if isinstance(msg, dict):
+                            clean_msgs.append(msg)
+                        else:
+                            clean_msgs.append(msg.model_dump(exclude_none=True))
+                    
+                    res = llm.create_chat_completion(
+                        messages=clean_msgs,
+                        tools=zoho_tools,
+                        tool_choice="auto",
+                        max_tokens=2048
+                    )
+                    m_data = res["choices"][0]["message"]
+                    content_text = m_data.get("content")
+                    
+                    class MockFunc:
+                        def __init__(self, name, args):
+                            self.name = name
+                            self.arguments = args
+                    class MockTC:
+                        def __init__(self, t_id, name, args):
+                            self.id = t_id
+                            self.function = MockFunc(name, args)
+                    for tc in m_data.get("tool_calls", []):
+                        tool_calls_data.append(MockTC(tc["id"], tc["function"]["name"], tc["function"]["arguments"]))
 
             if tool_calls_data:
                 tool_calls_dict = []
@@ -649,12 +704,18 @@ def chat(request: ChatRequest):
                         "content": json.dumps(result, default=str)
                     })
             else:
+                if fallback_used and not has_fallback_note:
+                    suffix = f"\n\n*(Note: Acting via {fallback_used} backup)*"
+                    content_text = (content_text or "") + suffix
                 return {"role": "assistant", "content": content_text}
                 
+    except HTTPException:
+        # Re-raise FastAPIs HTTPException to preserve Zoho's 401/403/404 errors etc.
+        raise
     except Exception as e:
         print(f"Chat error: {e}")
         traceback.print_exc()
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, detail=f"AI Assistant Error: {str(e)}")
 
 # ── Serve the static Vanilla JS frontend at /app ──────────────────────────────
 frontend_dir = os.path.join(os.path.dirname(__file__), "frontend")

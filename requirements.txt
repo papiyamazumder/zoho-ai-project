@@ -6,3 +6,4 @@ python-dotenv
 groq
 llama-cpp-python
 huggingface-hub
+ollama
