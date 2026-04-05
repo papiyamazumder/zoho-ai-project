@@ -350,6 +350,16 @@ def list_users():
     raise HTTPException(response.status_code, response.text)
 
 
+@app.get("/projects/{project_id}/users", tags=["Users"])
+def list_project_users_api(project_id: str):
+    """List users belonging to a specific project."""
+    url = f"https://{ZOHO_DOMAIN}/restapi/portal/{PORTAL_ID}/projects/{project_id}/users/"
+    response = zoho_request("GET", url)
+    if response.status_code == 200:
+        return response.json()
+    raise HTTPException(response.status_code, response.text)
+
+
 @app.post("/projects/{project_id}/users", tags=["Users"])
 def add_user_to_project(project_id: str, body: AddUserBody):
     """
@@ -448,6 +458,20 @@ zoho_tools = [
     {
         "type": "function",
         "function": {
+            "name": "list_project_users",
+            "description": "List users actively assigned to a specific project. Needed before assigning tasks.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string", "description": "The unique ID of the project."}
+                },
+                "required": ["project_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "add_user_to_project",
             "description": "Adds a user to a project (Assigning a project to an employee).",
             "parameters": {
@@ -476,7 +500,10 @@ Example format for options:
 }
 ```
 Include your conversational normal text BEFORE the JSON block. If a tool returns an error, DO NOT make up fake users, simply tell the user the API failed!
-2. Smart Clarifications: If you need a project_id but only have the name, try to list_projects first. If you need a user ID, list_users first! For task statuses, you can use the update_task tool.
+2. Strict Task Creation Workflow Constraint:
+   - When creating a task, you MUST confirm the `project_id` FIRST (using `list_projects` if needed).
+   - Once you have the `project_id`, you MUST run `list_project_users(project_id)` to get valid project members.
+   - Format the valid project users as JSON options buttons, and ask the user for both the assignee selection and the task name simultaneously.
 3. Reviewing Utilization & Status Updates: When asked about utilization of each team/member, use list_projects and list_tasks to calculate assignments. Use list_users to ensure mapping. You can update task statuses using the update_task tool.
 4. "Due this month": Look at the current date dynamically (evaluate it) and use list_projects to see `end_date_format` or `end_date` to determine what projects are due this month.
 """
@@ -523,6 +550,12 @@ def execute_tool(tool_call):
         elif name == "list_users":
             data = list_users()
             return [{"id": u.get("id"), "name": u.get("name"), "email": u.get("email")} for u in data.get("users", [])]
+        elif name == "list_project_users":
+            url = f"https://{ZOHO_DOMAIN}/restapi/portal/{PORTAL_ID}/projects/{args['project_id']}/users/"
+            r = zoho_request("GET", url)
+            if r.status_code == 200:
+                return [{"id": u.get("id"), "name": u.get("name"), "email": u.get("email")} for u in r.json().get("users", [])]
+            return {"error": r.text}
         elif name == "add_user_to_project":
             return add_user_to_project(args["project_id"], AddUserBody(email=args["email"]))
         else:
