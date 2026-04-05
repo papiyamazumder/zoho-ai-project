@@ -24,7 +24,7 @@ app.add_middleware(
 # Configuration
 ZOHO_DOMAIN = os.getenv("ZOHO_DOMAIN", "projectsapi.zoho.in") 
 ZOHO_ACCOUNTS_URL = os.getenv("ZOHO_ACCOUNTS_URL", "https://accounts.zoho.in")
-PORTAL_ID = os.getenv("PORTAL_ID", "43903000000069138")
+PORTAL_ID = os.getenv("PORTAL_ID", "60068773891")
 
 CLIENT_ID = os.getenv("ZOHO_CLIENT_ID", "")
 CLIENT_SECRET = os.getenv("ZOHO_CLIENT_SECRET", "")
@@ -79,7 +79,7 @@ def refresh_access_token():
         "client_secret": CLIENT_SECRET,
         "refresh_token": refresh_token
     }
-    response = requests.post(url, data=payload)
+    response = requests.post(url, data=payload, timeout=15)
     data = response.json()
     if "access_token" in data:
         tokens["access_token"] = data["access_token"]
@@ -94,12 +94,15 @@ def make_zoho_request(method, url, **kwargs):
     else:
         kwargs['headers'] = headers
         
-    response = requests.request(method, url, **kwargs)
+    response = requests.request(method, url, timeout=15, **kwargs)
     if response.status_code == 401:
         # Token might have expired, attempt to refresh
         if refresh_access_token():
             kwargs['headers'] = get_headers()
-            response = requests.request(method, url, **kwargs)
+            response = requests.request(method, url, timeout=15, **kwargs)
+    
+    if response.status_code >= 400:
+        print(f"Zoho API Error [{response.status_code}]: {response.text}")
     return response
 
 class TaskCreate(BaseModel):
@@ -128,7 +131,7 @@ def login():
     if not CLIENT_ID or not CLIENT_SECRET:
         raise HTTPException(status_code=500, detail="Client ID or Secret is not set in .env")
         
-    scope = "ZohoProjects.tasks.ALL,ZohoProjects.projects.ALL"
+    scope = "ZohoProjects.portals.ALL,ZohoProjects.projects.ALL,ZohoProjects.tasks.ALL"
     url = f"{ZOHO_ACCOUNTS_URL}/oauth/v2/auth?scope={scope}&client_id={CLIENT_ID}&response_type=code&access_type=offline&prompt=consent&redirect_uri={REDIRECT_URI}"
     return RedirectResponse(url)
 
@@ -157,6 +160,15 @@ def callback(code: str = None, error: str = None):
         return RedirectResponse(url="/app/index.html")
     else:
         raise HTTPException(status_code=400, detail=f"Failed to get token: {data}")
+
+@app.get("/portals")
+def list_portals():
+    """Retrieve all portals available for the authenticated user"""
+    url = f"https://{ZOHO_DOMAIN}/restapi/portals/"
+    response = make_zoho_request('GET', url)
+    if response.status_code == 200:
+        return response.json()
+    raise HTTPException(status_code=response.status_code, detail=response.text)
 
 @app.get("/projects")
 def list_projects():
