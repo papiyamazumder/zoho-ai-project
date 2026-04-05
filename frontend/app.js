@@ -22,7 +22,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const loader          = document.getElementById('loader');
     const refreshBtn      = document.getElementById('refresh-btn');
     const projectSelect   = document.getElementById('project-select');
-    const personaSelect   = document.getElementById('persona-select');
 
     // Create-task modal elements
     const createTaskBtn   = document.getElementById('create-task-btn');
@@ -40,20 +39,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const chatInput       = document.getElementById('chat-input');
     const sendBtn         = document.getElementById('send-btn');
     const chatBody        = document.getElementById('chat-body');
-
-
-    // ── SECTION A: Persona toggle ───────────────────────────────────────────
-    // The persona selector switches between "Developer" (read-only) and
-    // "Admin" (can create/delete tasks). Admin-only elements are toggled.
-
-    function updatePersonaUI() {
-        const isAdmin = personaSelect.value === 'admin';
-        document.querySelectorAll('.admin-only').forEach(el => {
-            el.classList.toggle('hidden', !isAdmin);
-        });
-    }
-
-    personaSelect.addEventListener('change', updatePersonaUI);
 
 
     // ── SECTION B: Load Projects ────────────────────────────────────────────
@@ -233,7 +218,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     </div>
                 </td>
                 <td style="font-size:12px;color:#616161">${task.work || '0:00'}</td>
-                <td class="action-col admin-only ${personaSelect.value === 'admin' ? '' : 'hidden'}">
+                <td class="action-col">
                     <button class="danger-btn delete-task-btn" data-id="${task.id_string}">Delete</button>
                 </td>`;
 
@@ -322,8 +307,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ── SECTION F: Chat Widget ──────────────────────────────────────────────
     // A floating chat button opens a panel.
-    // Messages are forwarded to the Streamlit AI assistant running on port 8501.
-    // This is a simple redirect — the full LLM-powered chat lives in Streamlit.
+
+    let chatHistory = [];
 
     chatFab.addEventListener('click', () => {
         chatPanel.classList.toggle('hidden');
@@ -332,12 +317,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     closeChatBtn.addEventListener('click', () => chatPanel.classList.add('hidden'));
 
-    /**
-     * Adds a message bubble to the chat panel.
-     * @param {string}  text   - The message text to display
-     * @param {boolean} isUser - true = right-aligned user bubble, false = AI bubble
-     */
-    function addMessage(text, isUser = false) {
+    function createMsgElement(text, isUser, options) {
         const msgDiv     = document.createElement('div');
         msgDiv.className = `message ${isUser ? 'user-message' : 'ai-message'}`;
 
@@ -350,34 +330,90 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const senderSpan     = document.createElement('span');
         senderSpan.className = 'msg-sender';
-        senderSpan.textContent = isUser ? 'You' : 'Zoho Assistant';
+        senderSpan.textContent = isUser ? 'You' : 'Zoho AI Assistant';
 
         const textP     = document.createElement('p');
-        textP.textContent = text;
+        textP.innerHTML = text.replace(/\n/g, '<br>');
 
         contentDiv.appendChild(senderSpan);
         contentDiv.appendChild(textP);
+        
+        if (options && options.length > 0) {
+            const optionsContainer = document.createElement('div');
+            optionsContainer.className = 'chat-options-container';
+            options.forEach(opt => {
+                const btn = document.createElement('button');
+                btn.className = 'chat-option-btn';
+                btn.textContent = opt.label;
+                btn.addEventListener('click', () => {
+                    handleSend(opt.value || opt.label);
+                });
+                optionsContainer.appendChild(btn);
+            });
+            contentDiv.appendChild(optionsContainer);
+        }
+
         msgDiv.appendChild(avatarDiv);
         msgDiv.appendChild(contentDiv);
+        return msgDiv;
+    }
+
+    function addMessage(text, isUser = false, options = null) {
+        const msgDiv = createMsgElement(text, isUser, options);
         chatBody.appendChild(msgDiv);
         chatBody.scrollTop = chatBody.scrollHeight;
     }
 
-    function handleSend() {
-        const text = chatInput.value.trim();
+    async function handleSend(forcedText = null) {
+        const text = typeof forcedText === 'string' ? forcedText : chatInput.value.trim();
         if (!text) return;
 
         addMessage(text, true);
-        chatInput.value = '';
+        if (typeof forcedText !== 'string') chatInput.value = '';
 
-        // Inform user that the full AI assistant is in Streamlit
-        // (The LLM chat is powered by Groq in streamlit_app.py on port 8501)
-        setTimeout(() => {
-            addMessage(
-                'For full AI-powered responses, open the Streamlit Assistant at ' +
-                'http://localhost:8501 — it uses Groq + LLaMA 3 for natural language task management.'
-            );
-        }, 500);
+        chatHistory.push({ role: 'user', content: text });
+
+        const loadingId = 'loading-' + Date.now();
+        const msgDiv = createMsgElement('...', false);
+        msgDiv.id = loadingId;
+        chatBody.appendChild(msgDiv);
+        chatBody.scrollTop = chatBody.scrollHeight;
+
+        try {
+            const res = await fetch('/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ messages: chatHistory })
+            });
+            if (!res.ok) throw new Error('API Error');
+            const data = await res.json();
+
+            document.getElementById(loadingId)?.remove();
+
+            chatHistory.push({ role: 'assistant', content: data.content });
+
+            let responseContent = data.content;
+            let options = null;
+            const jsonMatch = responseContent.match(/```json\s*([\s\S]*?)\s*```/);
+            if (jsonMatch) {
+                try {
+                    const parsed = JSON.parse(jsonMatch[1]);
+                    if (parsed.options) {
+                        options = parsed.options;
+                        responseContent = responseContent.replace(jsonMatch[0], '').trim();
+                    }
+                } catch(e) {}
+            }
+
+            addMessage(responseContent || "Done.", false, options);
+            
+            // Auto refresh if task operations might have occurred
+            loadTasks();
+            
+        } catch (err) {
+            document.getElementById(loadingId)?.remove();
+            addMessage('Error: Cannot reach assistant.', false);
+        }
     }
 
     sendBtn.addEventListener('click', handleSend);
@@ -387,7 +423,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
     // ── Initialise the page ─────────────────────────────────────────────────
-    updatePersonaUI();   // Apply correct visibility based on default persona
     loadProjects();      // Fetch projects from API and then auto-load tasks
 
 });

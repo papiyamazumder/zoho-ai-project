@@ -19,6 +19,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
+from groq import Groq
+import traceback
+
+# Optional imports for local LLM fallback
+try:
+    from huggingface_hub import hf_hub_download
+    from llama_cpp import Llama
+except ImportError:
+    hf_hub_download = None
+    Llama = None
 
 # ── Load environment variables from .env file ─────────────────────────────────
 load_dotenv()
@@ -46,7 +56,8 @@ REDIRECT_URI      = os.getenv("ZOHO_REDIRECT_URI", "http://localhost:8000/callba
 # ── Token file — persists OAuth tokens between server restarts ────────────────
 TOKEN_FILE = "zoho_tokens.json"
 
-
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 # ── Token helpers ──────────────────────────────────────────────────────────────
 
 def load_tokens() -> dict:
@@ -145,6 +156,7 @@ class TaskCreate(BaseModel):
     name: str
     description: Optional[str] = None
     priority: Optional[str] = "None"
+    person_responsible: Optional[str] = None
 
 
 class TaskUpdate(BaseModel):
@@ -153,12 +165,21 @@ class TaskUpdate(BaseModel):
     description: Optional[str] = None
     priority: Optional[str] = None
     status: Optional[str] = None
+    custom_status: Optional[str] = None
     percent_complete: Optional[int] = None
+    person_responsible: Optional[str] = None
 
 
 class AddUserBody(BaseModel):
     """Body for adding a user to a project."""
     email: str
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+    
+class ChatRequest(BaseModel):
+    messages: list[ChatMessage]
 
 
 # ── Auth endpoints ─────────────────────────────────────────────────────────────
@@ -341,6 +362,266 @@ def add_user_to_project(project_id: str, body: AddUserBody):
         return response.json()
     raise HTTPException(response.status_code, response.text)
 
+
+# ── LLM Chat Endpoint ─────────────────────────────────────────────────────────
+
+zoho_tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "list_projects",
+            "description": "Fetch all projects available in the user's Zoho portal. Returns project IDs and names.",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_tasks",
+            "description": "Fetch tasks for a specific project. Needed to get task utilization, deadlines, or listing tasks.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string", "description": "The unique ID of the project."}
+                },
+                "required": ["project_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_task",
+            "description": "Creates a task in a specific project.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string", "description": "The unique ID of the project."},
+                    "name": {"type": "string", "description": "Name of the task."},
+                    "priority": {"type": "string", "description": "Priority (None, Low, Medium, High)."},
+                    "person_responsible": {"type": "string", "description": "Unique user ID to assign this task to."}
+                },
+                "required": ["project_id", "name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_task",
+            "description": "Updates a task. Use this to assign/change users (person_responsible) or update the status (custom_status / status).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string", "description": "The unique ID of the project."},
+                    "task_id": {"type": "string", "description": "The unique ID of the task."},
+                    "person_responsible": {"type": "string", "description": "The unique user ID to assign."},
+                    "status": {"type": "string", "description": "The new status label or ID."}
+                },
+                "required": ["project_id", "task_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_task",
+            "description": "Deletes a task from a specific project.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string", "description": "The unique ID of the project."},
+                    "task_id": {"type": "string", "description": "The unique ID of the task."}
+                },
+                "required": ["project_id", "task_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_users",
+            "description": "List all users/team members to assess utilization or task assignments.",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_user_to_project",
+            "description": "Adds a user to a project (Assigning a project to an employee).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string", "description": "The unique ID of the project."},
+                    "email": {"type": "string", "description": "The email of the user to add."}
+                },
+                "required": ["project_id", "email"]
+            }
+        }
+    }
+]
+
+SYSTEM_PROMPT = """
+You are the Zoho AI Assistant, deeply integrated with Zoho Projects to manage tasks, projects, and analyze team utilization.
+Core rules:
+1. Interactive & Guided UI: For CRUD operations or selecting items (e.g., choosing a project or an assignee), DO NOT ask the user to type structured inputs manually. Instead, instruct them with normal text, BUT format your FINAL response to include a strict JSON block wrapped in ` ```json ` ... ` ``` ` that defines options the UI will render as buttons.
+Example format for options:
+```json
+{
+  "options": [
+    {"label": "John Doe", "value": "12345ID"},
+    {"label": "Jane Doe", "value": "67890ID"}
+  ]
+}
+```
+Include your conversational normal text BEFORE the JSON block.
+2. Smart Clarifications: If you need a project_id but only have the name, try to list_projects first. If you need a user ID, list_users first! For task statuses, you can use the update_task tool.
+3. Reviewing Utilization & Status Updates: When asked about utilization of each team/member, use list_projects and list_tasks to calculate assignments. Use list_users to ensure mapping. You can update task statuses using the update_task tool.
+4. "Due this month": Look at the current date dynamically (evaluate it) and use list_projects to see `end_date_format` or `end_date` to determine what projects are due this month.
+"""
+
+local_llm_instance = None
+
+def get_local_llm():
+    global local_llm_instance
+    if local_llm_instance is None:
+        if hf_hub_download is None or Llama is None:
+            raise Exception("llama-cpp-python or huggingface-hub is not installed.")
+        print("[Fallback] Downloading/Loading local Llama-3.2 model from Hugging Face...")
+        model_path = hf_hub_download(repo_id="bartowski/Llama-3.2-3B-Instruct-GGUF", filename="Llama-3.2-3B-Instruct-Q4_K_M.gguf")
+        local_llm_instance = Llama(model_path=model_path, n_ctx=4096, chat_format="llama-3", verbose=False)
+    return local_llm_instance
+
+def execute_tool(tool_call):
+    name = tool_call.function.name
+    args = {}
+    if tool_call.function.arguments:
+        args = json.loads(tool_call.function.arguments)
+    print(f"[Tool Call] {name}({args})")
+    
+    try:
+        if name == "list_projects":
+            data = list_projects()
+            return [{"id_string": p.get("id_string"), "name": p.get("name"), "end_date_format": p.get("end_date_format", ""), "end_date": p.get("end_date", "")} for p in data.get("projects", [])]
+        elif name == "list_tasks":
+            data = list_tasks(args["project_id"])
+            return [{"id_string": t.get("id_string"), "name": t.get("name"), "status": t.get("status",{}).get("name"), "priority": t.get("priority"), "owner": (t.get("details",{}).get("owners") or [{}])[0].get("name")} for t in data.get("tasks", [])]
+        elif name == "create_task":
+            return create_task(args["project_id"], TaskCreate(
+                name=args["name"], 
+                priority=args.get("priority", "None"),
+                person_responsible=args.get("person_responsible")
+            ))
+        elif name == "update_task":
+            return update_task(args["project_id"], args["task_id"], TaskUpdate(
+                status=args.get("status"),
+                person_responsible=args.get("person_responsible")
+            ))
+        elif name == "delete_task":
+            return delete_task(args["project_id"], args["task_id"])
+        elif name == "list_users":
+            data = list_users()
+            return [{"id": u.get("id"), "name": u.get("name"), "email": u.get("email")} for u in data.get("users", [])]
+        elif name == "add_user_to_project":
+            return add_user_to_project(args["project_id"], AddUserBody(email=args["email"]))
+        else:
+            return {"error": "Unknown tool"}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/chat", tags=["Chat"])
+def chat(request: ChatRequest):
+    if not groq_client:
+        raise HTTPException(500, "Groq API client is not configured.")
+    
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    for m in request.messages:
+        messages.append({"role": m.role, "content": m.content})
+        
+    try:
+        while True:
+            content_text = None
+            tool_calls_data = []
+
+            try:
+                # Primary Groq API Route
+                response = groq_client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=messages,
+                    tools=zoho_tools,
+                    tool_choice="auto",
+                    max_tokens=2048
+                )
+                m = response.choices[0].message
+                content_text = m.content
+                tool_calls_data = m.tool_calls or []
+            except Exception as groq_err:
+                print(f"[Fallback] Groq API Failed: {groq_err}")
+                print(f"[Fallback] Swapping to Local LLM (llama-cpp-python)...")
+                llm = get_local_llm()
+                
+                # Filter out messages with type expected by groq into pure dicts
+                clean_msgs = []
+                for msg in messages:
+                    if isinstance(msg, dict):
+                        clean_msgs.append(msg)
+                    else:
+                        clean_msgs.append(msg.model_dump(exclude_none=True))
+                
+                res = llm.create_chat_completion(
+                    messages=clean_msgs,
+                    tools=zoho_tools,
+                    tool_choice="auto",
+                    max_tokens=2048
+                )
+                m_data = res["choices"][0]["message"]
+                content_text = m_data.get("content")
+                
+                # Map llama-cpp dict output to object-like structure so the remaining code works
+                class MockFunc:
+                    def __init__(self, name, args):
+                        self.name = name
+                        self.arguments = args
+                class MockTC:
+                    def __init__(self, t_id, name, args):
+                        self.id = t_id
+                        self.function = MockFunc(name, args)
+                for tc in m_data.get("tool_calls", []):
+                    tool_calls_data.append(MockTC(tc["id"], tc["function"]["name"], tc["function"]["arguments"]))
+
+            if tool_calls_data:
+                tool_calls_dict = []
+                for tc in tool_calls_data:
+                    tool_calls_dict.append({
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments
+                        }
+                    })
+                messages.append({
+                    "role": "assistant",
+                    "content": content_text,
+                    "tool_calls": tool_calls_dict
+                })
+                
+                for tc in tool_calls_data:
+                    result = execute_tool(tc)
+                    messages.append({
+                        "tool_call_id": tc.id,
+                        "role": "tool",
+                        "name": tc.function.name,
+                        "content": json.dumps(result, default=str)
+                    })
+            else:
+                return {"role": "assistant", "content": content_text}
+                
+    except Exception as e:
+        print(f"Chat error: {e}")
+        traceback.print_exc()
+        raise HTTPException(500, str(e))
 
 # ── Serve the static Vanilla JS frontend at /app ──────────────────────────────
 frontend_dir = os.path.join(os.path.dirname(__file__), "frontend")

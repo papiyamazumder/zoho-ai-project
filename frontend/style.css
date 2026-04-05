@@ -475,7 +475,8 @@ body {
     border-radius: var(--radius-xl);
     border: 1px solid var(--border-subtle);
     box-shadow: var(--shadow-sm);
-    overflow: hidden;
+    overflow: auto;
+    max-height: calc(100vh - 180px);
 }
 
 .teams-table {
@@ -499,6 +500,19 @@ body {
     letter-spacing: 0.07em;
     white-space: nowrap;
     user-select: none;
+    position: sticky;
+    top: 0;
+    background: #fafafa;
+    z-index: 10;
+}
+
+.teams-table th::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    width: 100%;
+    border-bottom: 1px solid var(--border-subtle);
 }
 
 .teams-table th:first-child { padding-left: 20px; }
@@ -798,6 +812,31 @@ body {
 }
 
 .msg-content { flex: 1; min-width: 0; }
+
+.chat-options-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.chat-option-btn {
+    background: var(--bg-surface);
+    border: 1px solid var(--teams-purple);
+    color: var(--teams-purple);
+    padding: 6px 12px;
+    border-radius: 16px;
+    font-size: 11.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-family: inherit;
+}
+
+.chat-option-btn:hover {
+    background: var(--teams-purple);
+    color: white;
+}
 
 .msg-sender {
     display: block;

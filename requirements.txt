@@ -3,5 +3,6 @@ uvicorn
 requests
 pydantic
 python-dotenv
-streamlit
 groq
+llama-cpp-python
+huggingface-hub

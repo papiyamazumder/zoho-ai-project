@@ -21,7 +21,7 @@
                 </svg>
             </div>
             <div class="sidebar-brand-text">
-                <div class="sidebar-brand-name">Zoho Assistant</div>
+                <div class="sidebar-brand-name">Zoho AI Assistant</div>
                 <div class="sidebar-brand-sub">Groq + LLaMA 3</div>
             </div>
         </div>
@@ -135,10 +135,7 @@
                 </div>
             </div>
             <div class="command-right">
-                <select id="persona-select" class="teams-select accent-select" aria-label="Role">
-                    <option value="developer">Developer</option>
-                    <option value="admin">Admin</option>
-                </select>
+
                 <select id="project-select" class="teams-select" aria-label="Select project">
                     <option value="">Loading projects...</option>
                 </select>
@@ -150,7 +147,7 @@
                     </svg>
                     Refresh
                 </button>
-                <button id="create-task-btn" class="teams-btn primary-btn admin-only hidden" aria-label="Create new task">
+                <button id="create-task-btn" class="teams-btn primary-btn" aria-label="Create new task">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15">
                         <path d="M12 5v14M5 12h14"/>
                     </svg>
@@ -183,7 +180,7 @@
                                 <th style="width:100px" scope="col">Priority</th>
                                 <th style="width:140px" scope="col">Progress</th>
                                 <th style="width:110px" scope="col">Time Logged</th>
-                                <th class="action-col admin-only hidden" style="width:100px" scope="col">Actions</th>
+                                <th class="action-col" style="width:100px" scope="col">Actions</th>
                             </tr>
                         </thead>
                         <tbody id="tasks-tbody"></tbody>
@@ -220,8 +217,8 @@
                 <div class="message ai-message">
                     <div class="msg-avatar">AI</div>
                     <div class="msg-content">
-                        <span class="msg-sender">Zoho Assistant</span>
-                        <p>Hello. For full AI-powered responses, open the Streamlit Assistant at <strong>http://localhost:8501</strong></p>
+                        <span class="msg-sender">Zoho AI Assistant</span>
+                        <p>Hello. I'm your Zoho AI Assistant. How can I help you manage your tasks today?</p>
                     </div>
                 </div>
             </div>
